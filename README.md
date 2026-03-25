@@ -1,73 +1,87 @@
-# HKI
+# HKI — HotKey Input
 
-HKI is a small Windows helper for preset texts. A user opens the app normally, stores texts, assigns hotkeys like `Ctrl+3`, and HKI pastes the selected preset into the currently focused input field.
+A lightweight Windows utility for managing and pasting preset text snippets via global hotkeys. Assign keyboard shortcuts to frequently used texts, and HKI pastes them into any focused input field instantly.
 
-## For Colleagues
+## Features
 
-The simple install file is:
+- **Preset management** — Create, edit, duplicate, and organize text presets
+- **Global hotkeys** — Assign system-wide keyboard shortcuts to any preset (e.g. `Ctrl+3`)
+- **Quick-paste sidebar** — A floating overlay (`Ctrl+Shift+Space` by default) for fast preset selection
+- **System tray integration** — Minimize to tray and keep hotkeys active in the background
+- **Multi-language** — English and German UI
+- **No admin rights required** — Installs per-user, no elevated permissions needed
+- **Portable** — Can also run standalone without installation
 
-`Install-HKI.cmd`
+## Installation
 
-Double-click it. It installs HKI into your own user profile without admin rights and adds HKI to the Windows Start menu / Windows search.
+### Option 1: Download and Install
 
-After that you can open:
+1. Download the latest release (`HKI.exe`, `Install-HKI.cmd`, `Uninstall-HKI.cmd`)
+2. Place all files in a permanent folder
+3. Run `Install-HKI.cmd` — this creates a Start Menu shortcut so HKI appears in Windows Search
 
-- `HKI`
-- `HKI Tray`
-- `Uninstall HKI`
+After installation, search for **HKI** in the Windows Start menu to launch.
 
-## Build A Release Package
+### Option 2: Portable Use
 
-```powershell
-.\scripts\package-release.ps1
+Run `HKI.exe` directly from any folder. No installation required — hotkeys and presets work immediately.
+
+### Tray Mode
+
+To start HKI minimized to the system tray:
+
+```
+HKI.exe --tray
 ```
 
-That creates:
+## Uninstallation
 
-`release\HKI-win-x64.zip`
+Run `Uninstall-HKI.cmd`. This removes:
 
-`dist\` is not committed to git. On a fresh clone, run `.\build.ps1` to create `dist\HKI\HKI.exe`, or run `Install-HKI.cmd` and let it build the app first if needed.
+- The Start Menu shortcut
+- Application data (`%LOCALAPPDATA%\HKI`)
+- All application files (HKI.exe, Install-HKI.cmd)
+- The uninstaller itself
 
-When someone extracts that ZIP, they only need to run:
+## Building from Source
 
-`Install-HKI.cmd`
+Requires Python 3.10+ and the project dependencies.
 
-If they do not want to install it, they can also start:
-
-`HKI.exe`
-
-## GitHub Install Command
-
-If `raw.githubusercontent.com` is blocked by a company proxy, use the release download directly from `github.com`:
-
-```powershell
-$zip = Join-Path $env:TEMP 'HKI-win-x64.zip'; $dir = Join-Path $env:TEMP 'HKI-install'; Invoke-WebRequest 'https://github.com/CedrickGD/HKI/releases/latest/download/HKI-win-x64.zip' -OutFile $zip; if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }; Expand-Archive $zip -DestinationPath $dir -Force; & (Join-Path $dir 'Install-HKI.ps1') -StartAfterInstall
+```bash
+pip install -r requirements.txt
 ```
 
-This avoids `raw.githubusercontent.com` completely.
+Run the build script:
 
-If `github.com` downloads are blocked too, the fallback is:
-
-1. open the release page in a browser
-2. download `HKI-win-x64.zip`
-3. unzip it
-4. double-click `Install-HKI.cmd`
-
-## Local Developer Run
-
-```powershell
-.\.venv\Scripts\pythonw.exe .\hki_app.pyw
+```
+BUILD.bat
 ```
 
-Optional tray start:
+This produces a `release/` folder containing:
 
-```powershell
-.\.venv\Scripts\pythonw.exe .\hki_app.pyw --tray
+| File | Purpose |
+|---|---|
+| `HKI.exe` | Standalone application |
+| `Install-HKI.cmd` | Start Menu shortcut installer |
+| `Uninstall-HKI.cmd` | Complete uninstaller |
+
+### Developer Run (without building)
+
+```bash
+pythonw hki_app.pyw
+pythonw hki_app.pyw --tray
 ```
 
-## Notes
+## Data Storage
 
-- No admin rights required for install
-- Data is stored in `%LocalAppData%\HKI\settings.json`
-- The main app starts as a normal window
-- `X` and minimize can send the window into the tray
+All settings and presets are stored in:
+
+```
+%LOCALAPPDATA%\HKI\settings.json
+```
+
+No registry entries, no system-level changes.
+
+## License
+
+See [LICENSE](LICENSE) for details.
