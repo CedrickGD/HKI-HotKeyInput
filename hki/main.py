@@ -1,3 +1,4 @@
+"""Entry point for HKI."""
 from __future__ import annotations
 
 import argparse
@@ -22,14 +23,14 @@ def run() -> int:
 
     app = QApplication([sys.argv[0], *qt_args])
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("HOTKEYINPUT")
+    app.setApplicationName("HKI")
     app.setOrganizationName("HKI")
     app.setWindowIcon(QIcon(str(resource_path("assets", "hki.ico"))))
-    app.setFont(QFont("Segoe UI Variable Text", 10))
+    app.setFont(QFont("Segoe UI", 9))
 
     window = MainWindow(resource_path)
     if args.tray:
-        window.hide_to_tray(show_message=False)
+        window.hide_to_tray(msg=False)
     else:
         window.show()
     return app.exec()

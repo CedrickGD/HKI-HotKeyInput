@@ -1,1 +1,1 @@
-"""HKI desktop application package."""
+"""HKI — Hot Key Input."""

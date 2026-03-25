@@ -1,17 +1,20 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.user
 
+# Build output
 build/
 dist/
-release/
-
+dist2/
 *.spec
-HKI.slnx
-src/
 
+# IDE
 .idea/
 .vscode/
+*.user
+
+# Scripts
+generate_icon.py
