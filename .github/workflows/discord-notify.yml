@@ -1,0 +1,69 @@
+name: Discord Notifications
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  notify-push:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send push notification
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          COMMIT_MSG=$(echo '${{ github.event.head_commit.message }}' | head -1)
+          AUTHOR="${{ github.event.head_commit.author.name }}"
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          REPO="${{ github.repository }}"
+          BRANCH="${{ github.ref_name }}"
+          URL="${{ github.event.head_commit.url }}"
+
+          curl -s -H "Content-Type: application/json" -d "{
+            \"embeds\": [{
+              \"title\": \"Push to ${BRANCH}\",
+              \"description\": \"[\`${SHORT_SHA}\`](${URL}) ${COMMIT_MSG}\",
+              \"color\": 3447003,
+              \"author\": {
+                \"name\": \"${AUTHOR}\"
+              },
+              \"footer\": {
+                \"text\": \"${REPO}\"
+              },
+              \"timestamp\": \"${{ github.event.head_commit.timestamp }}\"
+            }]
+          }" "$WEBHOOK"
+
+  notify-release:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send release notification
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          NAME="${{ github.event.release.name }}"
+          URL="${{ github.event.release.html_url }}"
+          AUTHOR="${{ github.event.release.author.login }}"
+          REPO="${{ github.repository }}"
+
+          curl -s -H "Content-Type: application/json" -d "{
+            \"embeds\": [{
+              \"title\": \"Release: ${NAME}\",
+              \"url\": \"${URL}\",
+              \"description\": \"**${TAG}** is now available.\n\n[Download from GitHub](${URL})\",
+              \"color\": 5763719,
+              \"author\": {
+                \"name\": \"${AUTHOR}\"
+              },
+              \"footer\": {
+                \"text\": \"${REPO}\"
+              },
+              \"timestamp\": \"${{ github.event.release.published_at }}\"
+            }]
+          }" "$WEBHOOK"
