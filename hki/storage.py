@@ -8,7 +8,7 @@ import json
 import os
 import uuid
 
-VERSION = "1.0.0"
+VERSION = "1.0.0"  # ← bump this + update.xml when releasing
 
 
 def _utc_now() -> str:

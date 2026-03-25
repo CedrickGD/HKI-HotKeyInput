@@ -8,6 +8,7 @@ import sys
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
+from hki.updater import apply_pending_update, check_for_update_async
 from hki.window import MainWindow
 
 
@@ -21,6 +22,9 @@ def run() -> int:
     parser.add_argument("--tray", action="store_true")
     args, qt_args = parser.parse_known_args()
 
+    # Start background update check (once per session, silent)
+    check_for_update_async()
+
     app = QApplication([sys.argv[0], *qt_args])
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("HKI")
@@ -33,4 +37,9 @@ def run() -> int:
         window.hide_to_tray(msg=False)
     else:
         window.show()
-    return app.exec()
+    rc = app.exec()
+
+    # Silently apply downloaded update on exit
+    apply_pending_update()
+
+    return rc

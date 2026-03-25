@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Edit this file when publishing a new release:
+    1. Bump <version> to match the new release tag
+    2. Set <url> to the direct download link for HKI.exe
+-->
+<update>
+  <version>1.0.0</version>
+  <url>https://github.com/CedrickGD/HKI-HotKeyInput/releases/download/v1.0.0/HKI.exe</url>
+</update>
