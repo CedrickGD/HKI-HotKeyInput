@@ -52,8 +52,8 @@ TR: dict[str, dict[str, str]] = {
         "edited": "Edited (auto-saves on switch)",
         "saved": "Saved '{p}'",
         "saved_bad_hk": "Saved '{p}' (hotkey invalid)",
-        "def_name": "Welcome",
-        "def_text": "Thanks for reaching out. We are checking this now.",
+        "def_name": "Example",
+        "def_text": "Hello! This is a sample preset. Edit or delete it and add your own.",
         "new_base": "New preset",
         "copy_fmt": "Copy of {n}",
         "created": "Created '{p}'",
@@ -105,8 +105,8 @@ TR: dict[str, dict[str, str]] = {
         "edited": "Bearbeitet (speichert beim Wechsel)",
         "saved": "'{p}' gespeichert",
         "saved_bad_hk": "'{p}' gespeichert (Hotkey ungueltig)",
-        "def_name": "Begruessung",
-        "def_text": "Danke fuer die Nachricht. Wir pruefen das.",
+        "def_name": "Beispiel",
+        "def_text": "Hallo! Dies ist ein Beispiel-Preset. Bearbeite oder loesche es und erstelle eigene.",
         "new_base": "Neues Preset",
         "copy_fmt": "Kopie von {n}",
         "created": "'{p}' erstellt",
@@ -232,15 +232,28 @@ class Sidebar(QWidget):
         lo.setContentsMargins(6, 6, 6, 6)
         lo.setSpacing(4)
 
+        # Title bar with close button
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
         self.title = QLabel()
         self.title.setStyleSheet("font-weight:bold;")
+        self._close_btn = QPushButton("\u2715")
+        self._close_btn.setFixedSize(24, 24)
+        self._close_btn.setFlat(True)
+        self._close_btn.setStyleSheet("QPushButton{font-size:14px;border:none;color:gray;}"
+                                      "QPushButton:hover{color:white;background:#c42b1c;border-radius:4px;}")
+        self._close_btn.clicked.connect(self.hide)
+        title_row.addWidget(self.title)
+        title_row.addStretch()
+        title_row.addWidget(self._close_btn)
+
         self.search = QLineEdit()
         self.list = QListWidget()
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.hint = QLabel()
         self.hint.setStyleSheet("color:gray; font-size:11px;")
 
-        lo.addWidget(self.title)
+        lo.addLayout(title_row)
         lo.addWidget(self.search)
         lo.addWidget(self.list, 1)
         lo.addWidget(self.hint)
@@ -477,16 +490,13 @@ class MainWindow(QMainWindow):
         self._tray_edit = m.addAction("")
         self._tray_sb = m.addAction("")
         self._tray_hide = m.addAction("")
-        self._tray_paste = m.addAction("")
         m.addSeparator()
         self._tray_quit = m.addAction("")
         self._tray.setContextMenu(m)
-        self._tray.show()
         self._tray.activated.connect(self._on_tray)
         self._tray_edit.triggered.connect(self._show_from_tray)
         self._tray_sb.triggered.connect(self._open_sb_ui)
         self._tray_hide.triggered.connect(self.hide_to_tray)
-        self._tray_paste.triggered.connect(partial(self._do_paste, True))
         self._tray_quit.triggered.connect(self._quit)
 
     # ── i18n ───────────────────────────────────────────────────────────
@@ -516,7 +526,6 @@ class MainWindow(QMainWindow):
         self._tray_edit.setText(self._t("tray_edit"))
         self._tray_sb.setText(self._t("tray_sb"))
         self._tray_hide.setText(self._t("tray_hide"))
-        self._tray_paste.setText(self._t("tray_paste"))
         self._tray_quit.setText(self._t("tray_quit"))
         self._sidebar.retranslate()
         if not init:
@@ -640,7 +649,6 @@ class MainWindow(QMainWindow):
         for w in (self._name, self._hk, self._text, self._btn_save,
                   self._btn_copy, self._btn_paste, self._btn_dup, self._btn_del):
             w.setEnabled(on)
-        self._tray_paste.setEnabled(on)
 
     def _mark_dirty(self, *_) -> None:
         if self._suspend or not self._cur_id:
@@ -732,16 +740,16 @@ class MainWindow(QMainWindow):
         self._clip_snap = self._snap_clip(cb.mimeData())
         cb.setText(p.text)
         if target:
-            QTimer.singleShot(20, lambda: restore_foreground_window(target))
-            QTimer.singleShot(160, send_ctrl_v)
-            QTimer.singleShot(560, self._restore_clip)
-        elif hide:
-            self.hide_to_tray(msg=False)
-            QTimer.singleShot(180, send_ctrl_v)
-            QTimer.singleShot(560, self._restore_clip)
+            # Hotkey-triggered: we know the exact target window
+            QTimer.singleShot(50, lambda: restore_foreground_window(target))
+            QTimer.singleShot(250, send_ctrl_v)
+            QTimer.singleShot(700, self._restore_clip)
         else:
-            send_ctrl_v()
-            QTimer.singleShot(420, self._restore_clip)
+            # UI-triggered: hide everything so Windows brings previous app forward
+            self._sidebar.hide()
+            self.hide_to_tray(msg=False)
+            QTimer.singleShot(350, send_ctrl_v)
+            QTimer.singleShot(800, self._restore_clip)
         self._status(self._t("pasted", p=p.name))
 
     @staticmethod
@@ -845,6 +853,7 @@ class MainWindow(QMainWindow):
     # ── tray ───────────────────────────────────────────────────────────
 
     def _show_from_tray(self) -> None:
+        self._tray.hide()
         (self.showNormal if self.isMinimized() else self.show)()
         self.raise_()
         self.activateWindow()
@@ -852,6 +861,7 @@ class MainWindow(QMainWindow):
     def hide_to_tray(self, msg: bool = True) -> None:
         self._commit(False)
         self._save()
+        self._tray.show()
         self.hide()
         if msg and not self._tray_tipped:
             self._tray.showMessage(self._t("tray_title"), self._t("tray_msg"),

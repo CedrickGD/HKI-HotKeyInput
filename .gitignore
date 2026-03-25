@@ -9,6 +9,7 @@ __pycache__/
 build/
 dist/
 dist2/
+release/
 *.spec
 
 # IDE
