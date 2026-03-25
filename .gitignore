@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.user
+
+build/
+dist/
+release/
+
+*.spec
+HKI.slnx
+src/
+
+.idea/
+.vscode/

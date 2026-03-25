@@ -1,0 +1,1 @@
+"""HKI desktop application package."""
