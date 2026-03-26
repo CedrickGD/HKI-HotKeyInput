@@ -62,6 +62,7 @@ TR: dict[str, dict[str, str]] = {
         "deleted": "Deleted '{p}'",
         "copied": "Copied to clipboard",
         "empty_paste": "Preset is empty",
+        "paste_target_missing": "No target window to paste into",
         "pasted": "Pasted '{p}'",
         "warn_bad_hk": "Invalid hotkey on '{p}'",
         "warn_dup_hk": "Duplicate hotkey {h}",
@@ -115,6 +116,7 @@ TR: dict[str, dict[str, str]] = {
         "deleted": "'{p}' geloescht",
         "copied": "In Zwischenablage",
         "empty_paste": "Preset ist leer",
+        "paste_target_missing": "Kein Zielfenster zum Einfuegen gefunden",
         "pasted": "'{p}' eingefuegt",
         "warn_bad_hk": "Ungueltiger Hotkey bei '{p}'",
         "warn_dup_hk": "Doppelter Hotkey {h}",
@@ -361,6 +363,7 @@ class MainWindow(QMainWindow):
         self._tray_tipped = False
         self._backdrop_done = False
         self._sb_target = 0
+        self._last_external_hwnd = get_foreground_window()
         self._was_maximized = False
         self._was_minimized = False
 
@@ -375,6 +378,10 @@ class MainWindow(QMainWindow):
         self._sidebar = Sidebar(self._t)
         self._sidebar.chosen.connect(self._paste_from_sidebar)
         self._build_tray(icon)
+        self._fg_timer = QTimer(self)
+        self._fg_timer.setInterval(250)
+        self._fg_timer.timeout.connect(self._track_foreground_window)
+        self._fg_timer.start()
         self.setStatusBar(QStatusBar())
         self._retranslate(init=True)
         self._restore_pos()
@@ -500,7 +507,7 @@ class MainWindow(QMainWindow):
         self._text.textChanged.connect(self._mark_dirty)
         self._btn_save.clicked.connect(partial(self._commit, True, True))
         self._btn_copy.clicked.connect(self._copy)
-        self._btn_paste.clicked.connect(partial(self._do_paste, True))
+        self._btn_paste.clicked.connect(self._do_paste)
 
     # ── tray ───────────────────────────────────────────────────────────
 
@@ -744,14 +751,14 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(p.text)
         self._status(self._t("copied"))
 
-    def _do_paste(self, hide: bool) -> None:
+    def _do_paste(self) -> None:
         p = self._get()
         if not p:
             return
         self._commit(False)
-        self._paste_id(p.id, hide)
+        self._paste_id(p.id, target=self._resolve_paste_target(0), minimize_if_needed=False)
 
-    def _paste_id(self, pid: str, hide: bool, target: int = 0) -> None:
+    def _paste_id(self, pid: str, target: int = 0, minimize_if_needed: bool = True) -> None:
         p = self._get(pid)
         if not p or not p.text:
             self._status(self._t("empty_paste"))
@@ -760,12 +767,15 @@ class MainWindow(QMainWindow):
         self._clip_snap = self._snap_clip(cb.mimeData())
         cb.setText(p.text)
         if target:
-            # Hotkey-triggered: we know the exact target window
-            QTimer.singleShot(50, lambda: restore_foreground_window(target))
+            QTimer.singleShot(50, lambda hwnd=target: restore_foreground_window(hwnd))
             QTimer.singleShot(250, send_ctrl_v)
             QTimer.singleShot(700, self._restore_clip)
         else:
-            # UI-triggered: hide everything so Windows brings previous app forward
+            if not minimize_if_needed:
+                self._restore_clip()
+                self._status(self._t("paste_target_missing"))
+                return
+            # Sidebar/default behavior: hide so Windows restores the previous app.
             self._sidebar.hide()
             self.hide_to_tray(msg=False)
             QTimer.singleShot(350, send_ctrl_v)
@@ -790,6 +800,22 @@ class MainWindow(QMainWindow):
             QApplication.clipboard().setMimeData(self._clip_snap)
             self._clip_snap = None
 
+    def _own_hwnds(self) -> set[int]:
+        hwnds = {int(self.winId())}
+        sidebar_hwnd = int(self._sidebar.winId()) if hasattr(self, "_sidebar") else 0
+        if sidebar_hwnd:
+            hwnds.add(sidebar_hwnd)
+        return {hwnd for hwnd in hwnds if hwnd}
+
+    def _track_foreground_window(self) -> None:
+        fg = get_foreground_window()
+        if fg and fg not in self._own_hwnds():
+            self._last_external_hwnd = fg
+
+    def _resolve_paste_target(self, target: int) -> int:
+        resolved = target or self._last_external_hwnd
+        return 0 if resolved in self._own_hwnds() else resolved
+
     # ── sidebar ────────────────────────────────────────────────────────
 
     def _open_sb(self, target: int = 0) -> None:
@@ -811,7 +837,7 @@ class MainWindow(QMainWindow):
     def _paste_from_sidebar(self, pid: str) -> None:
         t = self._sb_target
         self._sidebar.hide()
-        self._paste_id(pid, False, target=t)
+        self._paste_id(pid, target=t)
 
     # ── hotkey reg ─────────────────────────────────────────────────────
 
@@ -953,6 +979,6 @@ class MainWindow(QMainWindow):
                         self._open_sb_hotkey()
                     elif kind == "preset":
                         fg = get_foreground_window()
-                        self._paste_id(val, False, target=(0 if fg == int(self.winId()) else fg))
+                        self._paste_id(val, target=(0 if fg == int(self.winId()) else fg))
                     return True, 0
         return super().nativeEvent(event_type, message)
