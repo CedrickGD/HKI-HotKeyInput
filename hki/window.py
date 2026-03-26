@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QCursor, QGuiApplication, QIcon, QKeyEvent
+from PySide6.QtGui import QAction, QCloseEvent, QCursor, QGuiApplication, QIcon, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
@@ -228,6 +228,10 @@ class Sidebar(QWidget):
         self._presets: list[Preset] = []
         self.resize(320, 400)
 
+        # Drag functionality
+        self._drag_start_pos: QPoint | None = None
+        self._dragging = False
+
         lo = QVBoxLayout(self)
         lo.setContentsMargins(6, 6, 6, 6)
         lo.setSpacing(4)
@@ -275,6 +279,8 @@ class Sidebar(QWidget):
         self._refresh()
 
     def open(self) -> None:
+        if self.isVisible():
+            return  # Prevent multiple openings per session
         self._refresh()
         scr = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         if scr:
@@ -312,6 +318,29 @@ class Sidebar(QWidget):
             return
         super().keyPressEvent(e)
 
+    def mousePressEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            # Check if click is on the title bar area (top part of the window)
+            title_bar_height = 30  # Approximate height of title bar
+            if e.pos().y() <= title_bar_height:
+                self._drag_start_pos = e.globalPos() - self.frameGeometry().topLeft()
+                self._dragging = True
+                e.accept()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e: QMouseEvent) -> None:
+        if self._dragging and self._drag_start_pos is not None:
+            self.move(e.globalPos() - self._drag_start_pos)
+            e.accept()
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self._drag_start_pos = None
+            e.accept()
+        super().mouseReleaseEvent(e)
+
 
 # ── Main window ────────────────────────────────────────────────────────
 
@@ -332,6 +361,8 @@ class MainWindow(QMainWindow):
         self._tray_tipped = False
         self._backdrop_done = False
         self._sb_target = 0
+        self._was_maximized = False
+        self._was_minimized = False
 
         icon = QIcon(str(self._res("assets", "hki.ico")))
         self.setWindowTitle(f"Hot Key Input  —  v{VERSION}")
@@ -381,15 +412,6 @@ class MainWindow(QMainWindow):
         self._sb_hk_edit.setFixedWidth(150)
         tb.addWidget(self._sb_hk_edit)
         tb.addSeparator()
-
-        self._close_tray_cb = QCheckBox()
-        self._close_tray_cb.setChecked(self._state.close_to_tray)
-        self._close_tray_cb.toggled.connect(lambda v: self._toggle("close_to_tray", v))
-        tb.addWidget(self._close_tray_cb)
-        self._min_tray_cb = QCheckBox()
-        self._min_tray_cb.setChecked(self._state.minimize_to_tray)
-        self._min_tray_cb.toggled.connect(lambda v: self._toggle("minimize_to_tray", v))
-        tb.addWidget(self._min_tray_cb)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -506,8 +528,6 @@ class MainWindow(QMainWindow):
         for l, a in self._lang_acts.items():
             a.setChecked(l == self._lang)
         self._sb_hk_lbl.setText(f"  {self._t('sb_hotkey')}  ")
-        self._close_tray_cb.setText(self._t("close_tray"))
-        self._min_tray_cb.setText(self._t("min_tray"))
         self._sb_btn.setText(self._t("open_sb"))
         self._search.setPlaceholderText(self._t("search"))
         self._btn_new.setText(self._t("new"))
@@ -854,13 +874,20 @@ class MainWindow(QMainWindow):
 
     def _show_from_tray(self) -> None:
         self._tray.hide()
-        (self.showNormal if self.isMinimized() else self.show)()
+        if self._was_maximized:
+            self.showMaximized()
+        elif self._was_minimized:
+            self.showMinimized()
+        else:
+            self.showNormal()
         self.raise_()
         self.activateWindow()
 
     def hide_to_tray(self, msg: bool = True) -> None:
         self._commit(False)
         self._save()
+        self._was_maximized = self.isMaximized()
+        self._was_minimized = self.isMinimized()
         self._tray.show()
         self.hide()
         if msg and not self._tray_tipped:
@@ -895,17 +922,13 @@ class MainWindow(QMainWindow):
             self._backdrop_done = True
 
     def changeEvent(self, e: QEvent) -> None:
-        if (e.type() == QEvent.Type.WindowStateChange
-                and self._state.minimize_to_tray and self.isMinimized() and not self._quitting):
-            e.ignore()
-            QTimer.singleShot(0, lambda: self.hide_to_tray(msg=True))
-            return
+        # Removed minimize_to_tray behavior - minimize should just minimize
         super().changeEvent(e)
 
     def closeEvent(self, e: QCloseEvent) -> None:
         self._commit(False)
         self._save()
-        if self._state.close_to_tray and not self._quitting:
+        if not self._quitting:
             e.ignore()
             self.hide_to_tray()
             return

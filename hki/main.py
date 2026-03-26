@@ -5,8 +5,9 @@ import argparse
 from pathlib import Path
 import sys
 
+from PySide6.QtCore import QSharedMemory
 from PySide6.QtGui import QFont, QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from hki.updater import apply_pending_update, check_for_update_async
 from hki.window import MainWindow
@@ -21,6 +22,13 @@ def run() -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tray", action="store_true")
     args, qt_args = parser.parse_known_args()
+
+    # Check for existing instance
+    shared_memory = QSharedMemory("HKI_SingleInstance")
+    if not shared_memory.create(1):
+        # Another instance is already running
+        print("HKI is already running.")
+        return 1
 
     # Start background update check (once per session, silent)
     check_for_update_async()
@@ -38,6 +46,9 @@ def run() -> int:
     else:
         window.show()
     rc = app.exec()
+
+    # Clean up shared memory
+    shared_memory.detach()
 
     # Silently apply downloaded update on exit
     apply_pending_update()
