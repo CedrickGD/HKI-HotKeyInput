@@ -1,6 +1,7 @@
 """Main window — native Windows 11 look, no custom themes."""
 from __future__ import annotations
 
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Callable
@@ -8,13 +9,14 @@ from typing import Callable
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QCursor, QGuiApplication, QIcon, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-    QMessageBox, QPushButton, QSizePolicy, QSplitter, QStatusBar,
-    QSystemTrayIcon, QTextEdit, QToolBar, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFormLayout,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
+    QSizePolicy, QSplitter, QStatusBar, QSystemTrayIcon, QTextEdit,
+    QToolBar, QVBoxLayout, QWidget,
 )
 
-from hki.storage import VERSION, Preset, Store, _utc_now
+from hki.storage import VERSION, CustomPlaceholder, Preset, Store, _utc_now
 from hki.win32 import (
     MSG, WM_HOTKEY, apply_windows_11_backdrop, capture_hotkey_from_event,
     get_foreground_window, normalize_hotkey, parse_hotkey, register_hotkey,
@@ -79,6 +81,19 @@ TR: dict[str, dict[str, str]] = {
         "tray_title": "HKI",
         "tray_msg": "Running in tray.",
         "lang_set": "Language: {l}",
+        "placeholders": "Placeholders",
+        "ph_info_date": "{{date}} — Current date (DD.MM.YYYY)",
+        "ph_info_time": "{{time}} — Current time (HH:MM, 24h)",
+        "ph_builtin": "Built-in",
+        "ph_custom": "Custom",
+        "ph_key": "Key",
+        "ph_value": "Value",
+        "ph_type": "Type",
+        "ph_type_text": "Text",
+        "ph_type_dt": "Date/Time",
+        "ph_add": "+ Add",
+        "ph_val_hint_text": "Replacement text",
+        "ph_val_hint_dt": "strftime pattern, e.g. %A",
     },
     "de": {
         "capture_idle": "Klicken, dann Tastenkombination",
@@ -133,6 +148,19 @@ TR: dict[str, dict[str, str]] = {
         "tray_title": "HKI",
         "tray_msg": "Laeuft im Tray.",
         "lang_set": "Sprache: {l}",
+        "placeholders": "Platzhalter",
+        "ph_info_date": "{{date}} — Aktuelles Datum (TT.MM.JJJJ)",
+        "ph_info_time": "{{time}} — Aktuelle Uhrzeit (HH:MM, 24h)",
+        "ph_builtin": "Eingebaut",
+        "ph_custom": "Benutzerdefiniert",
+        "ph_key": "Name",
+        "ph_value": "Wert",
+        "ph_type": "Typ",
+        "ph_type_text": "Text",
+        "ph_type_dt": "Datum/Zeit",
+        "ph_add": "+ Neu",
+        "ph_val_hint_text": "Ersetzungstext",
+        "ph_val_hint_dt": "strftime-Muster, z.B. %A",
     },
 }
 
@@ -471,6 +499,50 @@ class MainWindow(QMainWindow):
         self._text = QTextEdit()
         self._text.setAcceptRichText(False)
         rl.addWidget(self._text, 1)
+
+        # collapsible placeholders panel
+        self._ph_toggle = QPushButton()
+        self._ph_toggle.setFlat(True)
+        self._ph_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ph_toggle.setStyleSheet("QPushButton{text-align:left;color:gray;font-size:12px;padding:2px 0;}"
+                                       "QPushButton:hover{color:palette(text);}")
+        self._ph_panel = QWidget()
+        ph_lo = QVBoxLayout(self._ph_panel)
+        ph_lo.setContentsMargins(8, 4, 0, 4)
+        ph_lo.setSpacing(4)
+
+        # built-in section
+        self._ph_builtin_lbl = QLabel()
+        self._ph_builtin_lbl.setStyleSheet("font-weight:bold; font-size:12px;")
+        ph_lo.addWidget(self._ph_builtin_lbl)
+        self._ph_date_lbl = QLabel()
+        self._ph_time_lbl = QLabel()
+        for lbl in (self._ph_date_lbl, self._ph_time_lbl):
+            lbl.setStyleSheet("color:gray; font-size:12px; font-family:Consolas,monospace; padding-left:8px;")
+            ph_lo.addWidget(lbl)
+
+        # custom section
+        self._ph_custom_lbl = QLabel()
+        self._ph_custom_lbl.setStyleSheet("font-weight:bold; font-size:12px; margin-top:4px;")
+        ph_lo.addWidget(self._ph_custom_lbl)
+        self._ph_rows_widget = QWidget()
+        self._ph_rows_lo = QVBoxLayout(self._ph_rows_widget)
+        self._ph_rows_lo.setContentsMargins(0, 0, 0, 0)
+        self._ph_rows_lo.setSpacing(2)
+        ph_lo.addWidget(self._ph_rows_widget)
+        self._ph_row_widgets: list[dict] = []
+
+        self._ph_add_btn = QPushButton()
+        self._ph_add_btn.setFixedWidth(80)
+        self._ph_add_btn.setStyleSheet("font-size:12px;")
+        self._ph_add_btn.clicked.connect(self._ph_add_row)
+        ph_lo.addWidget(self._ph_add_btn)
+
+        self._ph_panel.hide()
+        self._ph_toggle.clicked.connect(self._toggle_ph)
+        rl.addWidget(self._ph_toggle)
+        rl.addWidget(self._ph_panel)
+
         eb = QHBoxLayout()
         eb.setSpacing(4)
         self._btn_save = QPushButton()
@@ -554,6 +626,13 @@ class MainWindow(QMainWindow):
         self._tray_sb.setText(self._t("tray_sb"))
         self._tray_hide.setText(self._t("tray_hide"))
         self._tray_quit.setText(self._t("tray_quit"))
+        arrow = "\u25BC" if self._ph_panel.isVisible() else "\u25B6"
+        self._ph_toggle.setText(f"{arrow}  {self._t('placeholders')}")
+        self._ph_builtin_lbl.setText(self._t("ph_builtin"))
+        self._ph_date_lbl.setText(self._t("ph_info_date"))
+        self._ph_time_lbl.setText(self._t("ph_info_time"))
+        self._ph_custom_lbl.setText(self._t("ph_custom"))
+        self._ph_add_btn.setText(self._t("ph_add"))
         self._sidebar.retranslate()
         if not init:
             self._commit(False, False)
@@ -574,6 +653,7 @@ class MainWindow(QMainWindow):
         self._sb_hk_edit.setText(self._state.sidebar_hotkey)
         if not self._state.presets:
             self._state.presets.append(Preset(name=self._t("def_name"), text=self._t("def_text")))
+        self._ph_load_rows()
         self._refresh_list(self._state.selected_id or self._state.presets[0].id)
         self._status(self._t("ready"))
         self._update_enabled()
@@ -758,14 +838,34 @@ class MainWindow(QMainWindow):
         self._commit(False)
         self._paste_id(p.id, target=self._resolve_paste_target(0), minimize_if_needed=False)
 
+    def _resolve_placeholders(self, text: str) -> str:
+        now = datetime.now()
+        text = text.replace("{date}", now.strftime("%d.%m.%Y"))
+        text = text.replace("{time}", now.strftime("%H:%M"))
+        for cp in self._state.custom_placeholders:
+            if not cp.key:
+                continue
+            token = "{" + cp.key + "}"
+            if token not in text:
+                continue
+            if cp.kind == "datetime":
+                try:
+                    text = text.replace(token, now.strftime(cp.value))
+                except Exception:
+                    pass
+            else:
+                text = text.replace(token, cp.value)
+        return text
+
     def _paste_id(self, pid: str, target: int = 0, minimize_if_needed: bool = True) -> None:
         p = self._get(pid)
         if not p or not p.text:
             self._status(self._t("empty_paste"))
             return
+        resolved = self._resolve_placeholders(p.text)
         cb = QApplication.clipboard()
         self._clip_snap = self._snap_clip(cb.mimeData())
-        cb.setText(p.text)
+        cb.setText(resolved)
         if target:
             QTimer.singleShot(50, lambda hwnd=target: restore_foreground_window(hwnd))
             QTimer.singleShot(250, send_ctrl_v)
@@ -892,6 +992,98 @@ class MainWindow(QMainWindow):
         while any(p.id != exc and p.name.casefold() == c.casefold() for p in self._state.presets):
             c = f"{base} {n}"; n += 1
         return c
+
+    def _toggle_ph(self) -> None:
+        vis = not self._ph_panel.isVisible()
+        self._ph_panel.setVisible(vis)
+        arrow = "\u25BC" if vis else "\u25B6"
+        self._ph_toggle.setText(f"{arrow}  {self._t('placeholders')}")
+
+    # ── custom placeholder rows ───────────────────────────────────────
+
+    def _ph_load_rows(self) -> None:
+        """Rebuild UI rows from state."""
+        for row in self._ph_row_widgets:
+            row["widget"].setParent(None)
+            row["widget"].deleteLater()
+        self._ph_row_widgets.clear()
+        for cp in self._state.custom_placeholders:
+            self._ph_build_row(cp.key, cp.kind, cp.value)
+
+    def _ph_build_row(self, key: str = "", kind: str = "text", value: str = "") -> None:
+        row_w = QWidget()
+        row_lo = QHBoxLayout(row_w)
+        row_lo.setContentsMargins(0, 0, 0, 0)
+        row_lo.setSpacing(4)
+
+        key_edit = QLineEdit(key)
+        key_edit.setPlaceholderText(self._t("ph_key"))
+        key_edit.setFixedWidth(90)
+        key_edit.setStyleSheet("font-size:12px;")
+
+        type_cb = QComboBox()
+        type_cb.addItem(self._t("ph_type_text"), "text")
+        type_cb.addItem(self._t("ph_type_dt"), "datetime")
+        type_cb.setCurrentIndex(0 if kind == "text" else 1)
+        type_cb.setFixedWidth(90)
+        type_cb.setStyleSheet("font-size:12px;")
+
+        val_edit = QLineEdit(value)
+        val_edit.setPlaceholderText(
+            self._t("ph_val_hint_text") if kind == "text" else self._t("ph_val_hint_dt"))
+        val_edit.setStyleSheet("font-size:12px;")
+
+        del_btn = QPushButton("\u2715")
+        del_btn.setFixedSize(22, 22)
+        del_btn.setFlat(True)
+        del_btn.setStyleSheet("QPushButton{font-size:12px;color:gray;border:none;}"
+                              "QPushButton:hover{color:white;background:#c42b1c;border-radius:3px;}")
+
+        row_lo.addWidget(key_edit)
+        row_lo.addWidget(type_cb)
+        row_lo.addWidget(val_edit, 1)
+        row_lo.addWidget(del_btn)
+
+        self._ph_rows_lo.addWidget(row_w)
+        entry = {"widget": row_w, "key": key_edit, "type": type_cb, "value": val_edit}
+        self._ph_row_widgets.append(entry)
+
+        # update value hint when type changes
+        def _on_type_change(idx: int, ve=val_edit, tc=type_cb) -> None:
+            k = tc.itemData(idx)
+            ve.setPlaceholderText(
+                self._t("ph_val_hint_text") if k == "text" else self._t("ph_val_hint_dt"))
+            self._ph_save()
+        type_cb.currentIndexChanged.connect(_on_type_change)
+
+        # auto-save on edit
+        key_edit.editingFinished.connect(self._ph_save)
+        val_edit.editingFinished.connect(self._ph_save)
+
+        # delete
+        del_btn.clicked.connect(lambda _, e=entry: self._ph_del_row(e))
+
+    def _ph_add_row(self) -> None:
+        self._ph_build_row()
+        self._ph_save()
+
+    def _ph_del_row(self, entry: dict) -> None:
+        if entry in self._ph_row_widgets:
+            self._ph_row_widgets.remove(entry)
+        entry["widget"].setParent(None)
+        entry["widget"].deleteLater()
+        self._ph_save()
+
+    def _ph_save(self) -> None:
+        """Sync UI rows back to state and persist."""
+        cps: list[CustomPlaceholder] = []
+        for row in self._ph_row_widgets:
+            key = row["key"].text().strip()
+            kind = row["type"].currentData()
+            val = row["value"].text()
+            cps.append(CustomPlaceholder(key=key, kind=kind, value=val))
+        self._state.custom_placeholders = cps
+        self._save()
 
     def _status(self, msg: str) -> None:
         self.statusBar().showMessage(msg, 8000)

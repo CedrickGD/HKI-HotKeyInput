@@ -38,6 +38,13 @@ class WinGeo:
 
 
 @dataclass(slots=True)
+class CustomPlaceholder:
+    key: str = ""
+    kind: str = "text"      # "text" or "datetime"
+    value: str = ""
+
+
+@dataclass(slots=True)
 class AppState:
     presets: list[Preset] = field(default_factory=list)
     selected_id: str | None = None
@@ -46,6 +53,7 @@ class AppState:
     minimize_to_tray: bool = False
     sidebar_hotkey: str = "Ctrl+Shift+Space"
     language: str = "en"
+    custom_placeholders: list[CustomPlaceholder] = field(default_factory=list)
 
 
 class Store:
@@ -61,6 +69,7 @@ class Store:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             presets = [Preset(**p) for p in raw.get("presets", [])]
             wg = raw.get("window", {})
+            cps = [CustomPlaceholder(**c) for c in raw.get("custom_placeholders", [])]
             return AppState(
                 presets=presets,
                 selected_id=raw.get("selected_id"),
@@ -74,6 +83,7 @@ class Store:
                 minimize_to_tray=raw.get("minimize_to_tray", False),
                 sidebar_hotkey=raw.get("sidebar_hotkey", "Ctrl+Shift+Space"),
                 language=raw.get("language", "en"),
+                custom_placeholders=cps,
             )
         except Exception:
             return AppState()
