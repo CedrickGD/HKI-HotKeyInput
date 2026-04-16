@@ -1,12 +1,15 @@
 """Preset and settings persistence — stored in %LOCALAPPDATA%/HKI."""
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
 import uuid
+
+log = logging.getLogger(__name__)
 
 VERSION = "1.0.0"  # ← bump this + update.xml when releasing
 
@@ -86,6 +89,7 @@ class Store:
                 custom_placeholders=cps,
             )
         except Exception:
+            log.exception("Failed to load settings from %s", self.path)
             return AppState()
 
     def save(self, state: AppState) -> None:

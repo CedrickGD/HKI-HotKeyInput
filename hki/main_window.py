@@ -1,378 +1,42 @@
 """Main window — native Windows 11 look, no custom themes."""
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+import time
 from functools import partial
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QCursor, QGuiApplication, QIcon, QKeyEvent, QMouseEvent
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFormLayout,
+    QAbstractItemView, QApplication, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QStatusBar, QSystemTrayIcon, QTextEdit,
+    QMainWindow, QMenu, QMessageBox, QPushButton,
+    QSizePolicy, QSplitter, QStatusBar, QTextEdit,
     QToolBar, QVBoxLayout, QWidget,
 )
 
-from hki.storage import VERSION, CustomPlaceholder, Preset, Store, _utc_now
-from hki.win32 import (
-    MSG, WM_HOTKEY, apply_windows_11_backdrop, capture_hotkey_from_event,
-    get_foreground_window, normalize_hotkey, parse_hotkey, register_hotkey,
-    restore_foreground_window, send_ctrl_v, unregister_hotkeys,
+from hki.hotkeys import HotkeyRegistry
+from hki.translations import LANGS, LANG_NAMES, TR
+from hki.clipboard import resolve_placeholders, restore_clipboard, snap_clipboard
+from hki.placeholders import PlaceholderPanel
+from hki.storage import VERSION, Preset, Store, _utc_now
+from hki.tray import TrayIcon
+from hki.widgets import HotkeyLineEdit, Sidebar
+from hki.windows_api import (
+    MSG, WM_HOTKEY, apply_windows_11_backdrop,
+    get_foreground_window, normalize_hotkey,
+    restore_foreground_window, send_ctrl_v,
 )
 
-# ── i18n ───────────────────────────────────────────────────────────────
+log = logging.getLogger(__name__)
 
-LANGS = ("en", "de")
-LANG_NAMES = {"en": "English", "de": "Deutsch"}
-TR: dict[str, dict[str, str]] = {
-    "en": {
-        "capture_idle": "Click, then press a key combo",
-        "capture_active": "Listening...",
-        "untitled": "Untitled",
-        "empty": "(empty)",
-        "sb_title": "Quick paste",
-        "sb_filter": "Filter...",
-        "sb_hint": "Esc to close",
-        "sb_hotkey": "Sidebar hotkey",
-        "open_sb": "Sidebar",
-        "close_tray": "Close to tray",
-        "min_tray": "Minimize to tray",
-        "search": "Search...",
-        "new": "New", "dup": "Duplicate", "del": "Delete",
-        "save": "Save", "copy": "Copy", "paste": "Paste",
-        "lbl_name": "Name", "lbl_hotkey": "Hotkey", "lbl_text": "Text",
-        "ph_name": "e.g. Ticket greeting",
-        "ph_text": "Preset text...",
-        "first": "Create your first preset.",
-        "ready": "Ready",
-        "tray_edit": "Edit presets", "tray_sb": "Open sidebar",
-        "tray_hide": "Hide to tray", "tray_paste": "Paste selected",
-        "tray_quit": "Quit",
-        "edited": "Edited (auto-saves on switch)",
-        "saved": "Saved '{p}'",
-        "saved_bad_hk": "Saved '{p}' (hotkey invalid)",
-        "def_name": "Example",
-        "def_text": "Hello! This is a sample preset. Edit or delete it and add your own.",
-        "new_base": "New preset",
-        "copy_fmt": "Copy of {n}",
-        "created": "Created '{p}'",
-        "duped": "Duplicated '{p}'",
-        "del_title": "Delete", "del_q": "Delete '{p}'?",
-        "deleted": "Deleted '{p}'",
-        "copied": "Copied to clipboard",
-        "empty_paste": "Preset is empty",
-        "paste_target_missing": "No target window to paste into",
-        "pasted": "Pasted '{p}'",
-        "warn_bad_hk": "Invalid hotkey on '{p}'",
-        "warn_dup_hk": "Duplicate hotkey {h}",
-        "warn_reg": "Could not register {h}",
-        "warn_reg_sb": "Could not register sidebar hotkey {h}",
-        "sb_hk_set": "Sidebar hotkey: {h}",
-        "sb_hk_clear": "Sidebar hotkey cleared",
-        "sb_hk_wait": "Press a key combo for sidebar...",
-        "sb_hk_cancel": "Cancelled",
-        "hk_wait": "Press a key combo...",
-        "hk_cancel": "Cancelled",
-        "hk_set": "Hotkey: {h}",
-        "no_presets": "Add a preset first",
-        "tray_title": "HKI",
-        "tray_msg": "Running in tray.",
-        "lang_set": "Language: {l}",
-        "placeholders": "Placeholders",
-        "ph_info_date": "{{date}} — Current date (DD.MM.YYYY)",
-        "ph_info_time": "{{time}} — Current time (HH:MM, 24h)",
-        "ph_builtin": "Built-in",
-        "ph_custom": "Custom",
-        "ph_key": "Key",
-        "ph_value": "Value",
-        "ph_type": "Type",
-        "ph_type_text": "Text",
-        "ph_type_dt": "Date/Time",
-        "ph_add": "+ Add",
-        "ph_val_hint_text": "Replacement text",
-        "ph_val_hint_dt": "strftime pattern, e.g. %A",
-    },
-    "de": {
-        "capture_idle": "Klicken, dann Tastenkombination",
-        "capture_active": "Warte...",
-        "untitled": "Unbenannt",
-        "empty": "(leer)",
-        "sb_title": "Schnelleinfuegen",
-        "sb_filter": "Filtern...",
-        "sb_hint": "Esc zum Schliessen",
-        "sb_hotkey": "Sidebar-Hotkey",
-        "open_sb": "Sidebar",
-        "close_tray": "Schliessen in Tray",
-        "min_tray": "Minimieren in Tray",
-        "search": "Suchen...",
-        "new": "Neu", "dup": "Duplizieren", "del": "Loeschen",
-        "save": "Speichern", "copy": "Kopieren", "paste": "Einfuegen",
-        "lbl_name": "Name", "lbl_hotkey": "Hotkey", "lbl_text": "Text",
-        "ph_name": "z.B. Ticket-Begruessung",
-        "ph_text": "Preset-Text...",
-        "first": "Erstelle dein erstes Preset.",
-        "ready": "Bereit",
-        "tray_edit": "Presets bearbeiten", "tray_sb": "Sidebar",
-        "tray_hide": "In Tray", "tray_paste": "Einfuegen",
-        "tray_quit": "Beenden",
-        "edited": "Bearbeitet (speichert beim Wechsel)",
-        "saved": "'{p}' gespeichert",
-        "saved_bad_hk": "'{p}' gespeichert (Hotkey ungueltig)",
-        "def_name": "Beispiel",
-        "def_text": "Hallo! Dies ist ein Beispiel-Preset. Bearbeite oder loesche es und erstelle eigene.",
-        "new_base": "Neues Preset",
-        "copy_fmt": "Kopie von {n}",
-        "created": "'{p}' erstellt",
-        "duped": "'{p}' dupliziert",
-        "del_title": "Loeschen", "del_q": "'{p}' loeschen?",
-        "deleted": "'{p}' geloescht",
-        "copied": "In Zwischenablage",
-        "empty_paste": "Preset ist leer",
-        "paste_target_missing": "Kein Zielfenster zum Einfuegen gefunden",
-        "pasted": "'{p}' eingefuegt",
-        "warn_bad_hk": "Ungueltiger Hotkey bei '{p}'",
-        "warn_dup_hk": "Doppelter Hotkey {h}",
-        "warn_reg": "{h} nicht registrierbar",
-        "warn_reg_sb": "Sidebar-Hotkey {h} nicht registrierbar",
-        "sb_hk_set": "Sidebar-Hotkey: {h}",
-        "sb_hk_clear": "Sidebar-Hotkey entfernt",
-        "sb_hk_wait": "Tastenkombination fuer Sidebar...",
-        "sb_hk_cancel": "Abgebrochen",
-        "hk_wait": "Tastenkombination druecken...",
-        "hk_cancel": "Abgebrochen",
-        "hk_set": "Hotkey: {h}",
-        "no_presets": "Erst ein Preset anlegen",
-        "tray_title": "HKI",
-        "tray_msg": "Laeuft im Tray.",
-        "lang_set": "Sprache: {l}",
-        "placeholders": "Platzhalter",
-        "ph_info_date": "{{date}} — Aktuelles Datum (TT.MM.JJJJ)",
-        "ph_info_time": "{{time}} — Aktuelle Uhrzeit (HH:MM, 24h)",
-        "ph_builtin": "Eingebaut",
-        "ph_custom": "Benutzerdefiniert",
-        "ph_key": "Name",
-        "ph_value": "Wert",
-        "ph_type": "Typ",
-        "ph_type_text": "Text",
-        "ph_type_dt": "Datum/Zeit",
-        "ph_add": "+ Neu",
-        "ph_val_hint_text": "Ersetzungstext",
-        "ph_val_hint_dt": "strftime-Muster, z.B. %A",
-    },
-}
+# Minimum interval between two hotkey-triggered pastes (seconds).
+_HK_DEBOUNCE = 0.3
 
 
-# ── Hotkey capture field ───────────────────────────────────────────────
-
-class HotkeyLineEdit(QLineEdit):
-    hotkey_changed = Signal(str)
-    capture_started = Signal()
-    capture_cancelled = Signal()
-    capture_finished = Signal(str)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._capturing = False
-        self._prev = ""
-        self._idle = TR["en"]["capture_idle"]
-        self._active = TR["en"]["capture_active"]
-        self.setReadOnly(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setPlaceholderText(self._idle)
-
-    def set_prompts(self, idle: str, active: str) -> None:
-        self._idle = idle
-        self._active = active
-        self.setPlaceholderText(self._active if self._capturing else self._idle)
-
-    def mousePressEvent(self, e) -> None:
-        super().mousePressEvent(e)
-        self._begin()
-
-    def focusInEvent(self, e) -> None:
-        super().focusInEvent(e)
-        self._begin()
-
-    def focusOutEvent(self, e) -> None:
-        self._cancel()
-        super().focusOutEvent(e)
-
-    def keyPressEvent(self, e: QKeyEvent) -> None:
-        k = e.key()
-        if k in (int(Qt.Key.Key_Tab), int(Qt.Key.Key_Backtab)):
-            self._cancel()
-            super().keyPressEvent(e)
-            return
-        if k == int(Qt.Key.Key_Escape):
-            self._cancel()
-            e.accept()
-            return
-        if k in (int(Qt.Key.Key_Backspace), int(Qt.Key.Key_Delete)):
-            self.clear()
-            self._prev = ""
-            self._capturing = False
-            self.setPlaceholderText(self._idle)
-            self.hotkey_changed.emit("")
-            return
-        g = capture_hotkey_from_event(e)
-        if not g:
-            e.accept()
-            return
-        self.hotkey_changed.emit(g.display)
-        self.setText(g.display)
-        self._capturing = False
-        self.setPlaceholderText(self._idle)
-        self.capture_finished.emit(g.display)
-        e.accept()
-
-    def _begin(self) -> None:
-        if self._capturing:
-            return
-        self._prev = self.text()
-        self.clear()
-        self._capturing = True
-        self.setPlaceholderText(self._active)
-        self.capture_started.emit()
-
-    def _cancel(self) -> None:
-        if not self._capturing:
-            return
-        self.setText(self._prev)
-        self._capturing = False
-        self.setPlaceholderText(self._idle)
-        self.capture_cancelled.emit()
-
-
-# ── Quick-paste sidebar ────────────────────────────────────────────────
-
-class Sidebar(QWidget):
-    chosen = Signal(str)
-
-    def __init__(self, t: Callable[..., str], parent: QWidget | None = None) -> None:
-        flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
-        super().__init__(parent, flags)
-        self._t = t
-        self._presets: list[Preset] = []
-        self.resize(320, 400)
-
-        # Drag functionality
-        self._drag_start_pos: QPoint | None = None
-        self._dragging = False
-
-        lo = QVBoxLayout(self)
-        lo.setContentsMargins(6, 6, 6, 6)
-        lo.setSpacing(4)
-
-        # Title bar with close button
-        title_row = QHBoxLayout()
-        title_row.setContentsMargins(0, 0, 0, 0)
-        self.title = QLabel()
-        self.title.setStyleSheet("font-weight:bold;")
-        self._close_btn = QPushButton("\u2715")
-        self._close_btn.setFixedSize(24, 24)
-        self._close_btn.setFlat(True)
-        self._close_btn.setStyleSheet("QPushButton{font-size:14px;border:none;color:gray;}"
-                                      "QPushButton:hover{color:white;background:#c42b1c;border-radius:4px;}")
-        self._close_btn.clicked.connect(self.hide)
-        title_row.addWidget(self.title)
-        title_row.addStretch()
-        title_row.addWidget(self._close_btn)
-
-        self.search = QLineEdit()
-        self.list = QListWidget()
-        self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.hint = QLabel()
-        self.hint.setStyleSheet("color:gray; font-size:11px;")
-
-        lo.addLayout(title_row)
-        lo.addWidget(self.search)
-        lo.addWidget(self.list, 1)
-        lo.addWidget(self.hint)
-
-        self.search.textChanged.connect(self._refresh)
-        self.search.returnPressed.connect(self._emit)
-        self.list.itemActivated.connect(lambda _: self._emit())
-        self.retranslate()
-
-    def retranslate(self) -> None:
-        self.setWindowTitle(self._t("sb_title"))
-        self.title.setText(self._t("sb_title"))
-        self.search.setPlaceholderText(self._t("sb_filter"))
-        self.hint.setText(self._t("sb_hint"))
-
-    def set_presets(self, presets: list[Preset]) -> None:
-        self._presets = list(presets)
-        self.search.clear()
-        self._refresh()
-
-    def open(self) -> None:
-        if self.isVisible():
-            return  # Prevent multiple openings per session
-        self._refresh()
-        scr = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
-        if scr:
-            g = scr.availableGeometry()
-            self.move(g.x() + g.width() - self.width() - 16, g.y() + 16)
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        self.search.setFocus()
-        self.search.selectAll()
-
-    def _refresh(self) -> None:
-        q = self.search.text().strip().lower()
-        hits = [p for p in self._presets
-                if not q or q in p.name.lower() or q in p.text.lower() or q in p.hotkey.lower()]
-        hits.sort(key=lambda p: p.name.lower())
-        self.list.clear()
-        for p in hits:
-            hk = f"  [{p.hotkey}]" if p.hotkey else ""
-            item = QListWidgetItem(f"{p.name or '?'}{hk}")
-            item.setData(Qt.ItemDataRole.UserRole, p.id)
-            self.list.addItem(item)
-        if self.list.count():
-            self.list.setCurrentRow(0)
-
-    def _emit(self) -> None:
-        it = self.list.currentItem()
-        if it:
-            self.chosen.emit(it.data(Qt.ItemDataRole.UserRole))
-
-    def keyPressEvent(self, e: QKeyEvent) -> None:
-        if e.key() == int(Qt.Key.Key_Escape):
-            self.hide()
-            e.accept()
-            return
-        super().keyPressEvent(e)
-
-    def mousePressEvent(self, e: QMouseEvent) -> None:
-        if e.button() == Qt.MouseButton.LeftButton:
-            # Check if click is on the title bar area (top part of the window)
-            title_bar_height = 30  # Approximate height of title bar
-            if e.pos().y() <= title_bar_height:
-                self._drag_start_pos = e.globalPos() - self.frameGeometry().topLeft()
-                self._dragging = True
-                e.accept()
-        super().mousePressEvent(e)
-
-    def mouseMoveEvent(self, e: QMouseEvent) -> None:
-        if self._dragging and self._drag_start_pos is not None:
-            self.move(e.globalPos() - self._drag_start_pos)
-            e.accept()
-        super().mouseMoveEvent(e)
-
-    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            self._drag_start_pos = None
-            e.accept()
-        super().mouseReleaseEvent(e)
-
-
-# ── Main window ────────────────────────────────────────────────────────
+# ── Main window ──────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
     def __init__(self, resource_path: Callable[..., Path]) -> None:
@@ -382,9 +46,8 @@ class MainWindow(QMainWindow):
         self._state = self._store.load()
         self._lang = self._state.language if self._state.language in LANGS else "en"
         self._cur_id: str | None = None
-        self._hotkeys: dict[int, tuple[str, str]] = {}
-        self._next_hk_id = 0x5000
-        self._clip_snap: QMimeData | None = None
+        self._hk_reg = HotkeyRegistry()
+        self._clip_snap = None
         self._quitting = False
         self._suspend = False
         self._dirty = False
@@ -394,6 +57,7 @@ class MainWindow(QMainWindow):
         self._last_external_hwnd = get_foreground_window()
         self._was_maximized = False
         self._was_minimized = False
+        self._last_hk_time = 0.0
 
         icon = QIcon(str(self._res("assets", "hki.ico")))
         self.setWindowTitle(f"Hot Key Input  —  v{VERSION}")
@@ -405,7 +69,9 @@ class MainWindow(QMainWindow):
         self._build_central()
         self._sidebar = Sidebar(self._t)
         self._sidebar.chosen.connect(self._paste_from_sidebar)
-        self._build_tray(icon)
+        self._tray = TrayIcon(self, icon, self._t)
+        self._tray.connect(self._show_from_tray, self._open_sb_ui,
+                           self.hide_to_tray, self._quit)
         self._fg_timer = QTimer(self)
         self._fg_timer.setInterval(250)
         self._fg_timer.timeout.connect(self._track_foreground_window)
@@ -462,7 +128,7 @@ class MainWindow(QMainWindow):
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
 
-        # left
+        # left — preset list
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(4, 4, 4, 4)
@@ -482,7 +148,7 @@ class MainWindow(QMainWindow):
         btns.addWidget(self._btn_del)
         ll.addLayout(btns)
 
-        # right
+        # right — editor
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(4, 4, 4, 4)
@@ -500,47 +166,8 @@ class MainWindow(QMainWindow):
         self._text.setAcceptRichText(False)
         rl.addWidget(self._text, 1)
 
-        # collapsible placeholders panel
-        self._ph_toggle = QPushButton()
-        self._ph_toggle.setFlat(True)
-        self._ph_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._ph_toggle.setStyleSheet("QPushButton{text-align:left;color:gray;font-size:12px;padding:2px 0;}"
-                                       "QPushButton:hover{color:palette(text);}")
-        self._ph_panel = QWidget()
-        ph_lo = QVBoxLayout(self._ph_panel)
-        ph_lo.setContentsMargins(8, 4, 0, 4)
-        ph_lo.setSpacing(4)
-
-        # built-in section
-        self._ph_builtin_lbl = QLabel()
-        self._ph_builtin_lbl.setStyleSheet("font-weight:bold; font-size:12px;")
-        ph_lo.addWidget(self._ph_builtin_lbl)
-        self._ph_date_lbl = QLabel()
-        self._ph_time_lbl = QLabel()
-        for lbl in (self._ph_date_lbl, self._ph_time_lbl):
-            lbl.setStyleSheet("color:gray; font-size:12px; font-family:Consolas,monospace; padding-left:8px;")
-            ph_lo.addWidget(lbl)
-
-        # custom section
-        self._ph_custom_lbl = QLabel()
-        self._ph_custom_lbl.setStyleSheet("font-weight:bold; font-size:12px; margin-top:4px;")
-        ph_lo.addWidget(self._ph_custom_lbl)
-        self._ph_rows_widget = QWidget()
-        self._ph_rows_lo = QVBoxLayout(self._ph_rows_widget)
-        self._ph_rows_lo.setContentsMargins(0, 0, 0, 0)
-        self._ph_rows_lo.setSpacing(2)
-        ph_lo.addWidget(self._ph_rows_widget)
-        self._ph_row_widgets: list[dict] = []
-
-        self._ph_add_btn = QPushButton()
-        self._ph_add_btn.setFixedWidth(80)
-        self._ph_add_btn.setStyleSheet("font-size:12px;")
-        self._ph_add_btn.clicked.connect(self._ph_add_row)
-        ph_lo.addWidget(self._ph_add_btn)
-
-        self._ph_panel.hide()
-        self._ph_toggle.clicked.connect(self._toggle_ph)
-        rl.addWidget(self._ph_toggle)
+        self._ph_panel = PlaceholderPanel(self._t)
+        self._ph_panel.changed.connect(self._on_ph_changed)
         rl.addWidget(self._ph_panel)
 
         eb = QHBoxLayout()
@@ -581,25 +208,6 @@ class MainWindow(QMainWindow):
         self._btn_copy.clicked.connect(self._copy)
         self._btn_paste.clicked.connect(self._do_paste)
 
-    # ── tray ───────────────────────────────────────────────────────────
-
-    def _build_tray(self, icon: QIcon) -> None:
-        self._tray = QSystemTrayIcon(self)
-        self._tray.setIcon(icon)
-        self._tray.setToolTip("HKI")
-        m = QMenu(self)
-        self._tray_edit = m.addAction("")
-        self._tray_sb = m.addAction("")
-        self._tray_hide = m.addAction("")
-        m.addSeparator()
-        self._tray_quit = m.addAction("")
-        self._tray.setContextMenu(m)
-        self._tray.activated.connect(self._on_tray)
-        self._tray_edit.triggered.connect(self._show_from_tray)
-        self._tray_sb.triggered.connect(self._open_sb_ui)
-        self._tray_hide.triggered.connect(self.hide_to_tray)
-        self._tray_quit.triggered.connect(self._quit)
-
     # ── i18n ───────────────────────────────────────────────────────────
 
     def _retranslate(self, init: bool = False) -> None:
@@ -622,17 +230,8 @@ class MainWindow(QMainWindow):
         self._btn_paste.setText(self._t("paste"))
         self._sb_hk_edit.set_prompts(self._t("capture_idle"), self._t("capture_active"))
         self._hk.set_prompts(self._t("capture_idle"), self._t("capture_active"))
-        self._tray_edit.setText(self._t("tray_edit"))
-        self._tray_sb.setText(self._t("tray_sb"))
-        self._tray_hide.setText(self._t("tray_hide"))
-        self._tray_quit.setText(self._t("tray_quit"))
-        arrow = "\u25BC" if self._ph_panel.isVisible() else "\u25B6"
-        self._ph_toggle.setText(f"{arrow}  {self._t('placeholders')}")
-        self._ph_builtin_lbl.setText(self._t("ph_builtin"))
-        self._ph_date_lbl.setText(self._t("ph_info_date"))
-        self._ph_time_lbl.setText(self._t("ph_info_time"))
-        self._ph_custom_lbl.setText(self._t("ph_custom"))
-        self._ph_add_btn.setText(self._t("ph_add"))
+        self._tray.retranslate()
+        self._ph_panel.retranslate()
         self._sidebar.retranslate()
         if not init:
             self._commit(False, False)
@@ -653,7 +252,7 @@ class MainWindow(QMainWindow):
         self._sb_hk_edit.setText(self._state.sidebar_hotkey)
         if not self._state.presets:
             self._state.presets.append(Preset(name=self._t("def_name"), text=self._t("def_text")))
-        self._ph_load_rows()
+        self._ph_panel.load(self._state.custom_placeholders)
         self._refresh_list(self._state.selected_id or self._state.presets[0].id)
         self._status(self._t("ready"))
         self._update_enabled()
@@ -679,10 +278,6 @@ class MainWindow(QMainWindow):
         self._state.sidebar_hotkey = normalize_hotkey(self._sb_hk_edit.text().strip())
         self._state.language = self._lang
         self._store.save(self._state)
-
-    def _toggle(self, attr: str, val: bool) -> None:
-        setattr(self._state, attr, val)
-        self._save()
 
     # ── preset list ────────────────────────────────────────────────────
 
@@ -838,33 +433,16 @@ class MainWindow(QMainWindow):
         self._commit(False)
         self._paste_id(p.id, target=self._resolve_paste_target(0), minimize_if_needed=False)
 
-    def _resolve_placeholders(self, text: str) -> str:
-        now = datetime.now()
-        text = text.replace("{date}", now.strftime("%d.%m.%Y"))
-        text = text.replace("{time}", now.strftime("%H:%M"))
-        for cp in self._state.custom_placeholders:
-            if not cp.key:
-                continue
-            token = "{" + cp.key + "}"
-            if token not in text:
-                continue
-            if cp.kind == "datetime":
-                try:
-                    text = text.replace(token, now.strftime(cp.value))
-                except Exception:
-                    pass
-            else:
-                text = text.replace(token, cp.value)
-        return text
+    # ── paste ──────────────────────────────────────────────────────────
 
     def _paste_id(self, pid: str, target: int = 0, minimize_if_needed: bool = True) -> None:
         p = self._get(pid)
         if not p or not p.text:
             self._status(self._t("empty_paste"))
             return
-        resolved = self._resolve_placeholders(p.text)
+        resolved = resolve_placeholders(p.text, self._state.custom_placeholders)
         cb = QApplication.clipboard()
-        self._clip_snap = self._snap_clip(cb.mimeData())
+        self._clip_snap = snap_clipboard(cb.mimeData())
         cb.setText(resolved)
         if target:
             QTimer.singleShot(50, lambda hwnd=target: restore_foreground_window(hwnd))
@@ -875,30 +453,17 @@ class MainWindow(QMainWindow):
                 self._restore_clip()
                 self._status(self._t("paste_target_missing"))
                 return
-            # Sidebar/default behavior: hide so Windows restores the previous app.
             self._sidebar.hide()
             self.hide_to_tray(msg=False)
             QTimer.singleShot(350, send_ctrl_v)
             QTimer.singleShot(800, self._restore_clip)
         self._status(self._t("pasted", p=p.name))
 
-    @staticmethod
-    def _snap_clip(src) -> QMimeData | None:
-        if not src:
-            return None
-        s = QMimeData()
-        for f in src.formats():
-            s.setData(f, src.data(f))
-        if src.hasText():
-            s.setText(src.text())
-        if src.hasHtml():
-            s.setHtml(src.html())
-        return s
-
     def _restore_clip(self) -> None:
-        if self._clip_snap:
-            QApplication.clipboard().setMimeData(self._clip_snap)
-            self._clip_snap = None
+        restore_clipboard(self._clip_snap)
+        self._clip_snap = None
+
+    # ── foreground tracking ────────────────────────────────────────────
 
     def _own_hwnds(self) -> set[int]:
         hwnds = {int(self.winId())}
@@ -939,43 +504,15 @@ class MainWindow(QMainWindow):
         self._sidebar.hide()
         self._paste_id(pid, target=t)
 
-    # ── hotkey reg ─────────────────────────────────────────────────────
+    # ── hotkeys ────────────────────────────────────────────────────────
 
     def _reg_hotkeys(self) -> None:
         hwnd = int(self.winId())
         if not hwnd:
             return
-        unregister_hotkeys(hwnd, list(self._hotkeys.keys()))
-        self._hotkeys.clear()
-        self._next_hk_id = 0x5000
-        seen: set[str] = set()
-        warns: list[str] = []
-
-        sb = parse_hotkey(self._state.sidebar_hotkey)
-        if sb:
-            hid = self._next_hk_id; self._next_hk_id += 1
-            seen.add(sb.display)
-            if register_hotkey(hwnd, hid, sb):
-                self._hotkeys[hid] = ("sb", "")
-            else:
-                warns.append(self._t("warn_reg_sb", h=sb.display))
-
-        for p in self._state.presets:
-            if not p.hotkey:
-                continue
-            g = parse_hotkey(p.hotkey)
-            if not g:
-                warns.append(self._t("warn_bad_hk", p=p.name))
-                continue
-            if g.display in seen:
-                warns.append(self._t("warn_dup_hk", h=g.display))
-                continue
-            seen.add(g.display)
-            hid = self._next_hk_id; self._next_hk_id += 1
-            if register_hotkey(hwnd, hid, g):
-                self._hotkeys[hid] = ("preset", p.id)
-            else:
-                warns.append(self._t("warn_reg", h=g.display))
+        warns = self._hk_reg.register_all(
+            hwnd, self._state.sidebar_hotkey, self._state.presets, self._t,
+        )
         if warns:
             self._status(warns[0])
 
@@ -983,7 +520,17 @@ class MainWindow(QMainWindow):
         self._state.sidebar_hotkey = normalize_hotkey(val)
         self._save()
         self._reg_hotkeys()
-        self._status(self._t("sb_hk_set", h=self._state.sidebar_hotkey) if self._state.sidebar_hotkey else self._t("sb_hk_clear"))
+        self._status(self._t("sb_hk_set", h=self._state.sidebar_hotkey)
+                     if self._state.sidebar_hotkey else self._t("sb_hk_clear"))
+
+    # ── placeholders ───────────────────────────────────────────────────
+
+    def _on_ph_changed(self) -> None:
+        reserved = self._ph_panel.reserved_key()
+        if reserved:
+            self._status(self._t("ph_reserved", k=reserved))
+        self._state.custom_placeholders = self._ph_panel.collect()
+        self._save()
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -992,98 +539,6 @@ class MainWindow(QMainWindow):
         while any(p.id != exc and p.name.casefold() == c.casefold() for p in self._state.presets):
             c = f"{base} {n}"; n += 1
         return c
-
-    def _toggle_ph(self) -> None:
-        vis = not self._ph_panel.isVisible()
-        self._ph_panel.setVisible(vis)
-        arrow = "\u25BC" if vis else "\u25B6"
-        self._ph_toggle.setText(f"{arrow}  {self._t('placeholders')}")
-
-    # ── custom placeholder rows ───────────────────────────────────────
-
-    def _ph_load_rows(self) -> None:
-        """Rebuild UI rows from state."""
-        for row in self._ph_row_widgets:
-            row["widget"].setParent(None)
-            row["widget"].deleteLater()
-        self._ph_row_widgets.clear()
-        for cp in self._state.custom_placeholders:
-            self._ph_build_row(cp.key, cp.kind, cp.value)
-
-    def _ph_build_row(self, key: str = "", kind: str = "text", value: str = "") -> None:
-        row_w = QWidget()
-        row_lo = QHBoxLayout(row_w)
-        row_lo.setContentsMargins(0, 0, 0, 0)
-        row_lo.setSpacing(4)
-
-        key_edit = QLineEdit(key)
-        key_edit.setPlaceholderText(self._t("ph_key"))
-        key_edit.setFixedWidth(90)
-        key_edit.setStyleSheet("font-size:12px;")
-
-        type_cb = QComboBox()
-        type_cb.addItem(self._t("ph_type_text"), "text")
-        type_cb.addItem(self._t("ph_type_dt"), "datetime")
-        type_cb.setCurrentIndex(0 if kind == "text" else 1)
-        type_cb.setFixedWidth(90)
-        type_cb.setStyleSheet("font-size:12px;")
-
-        val_edit = QLineEdit(value)
-        val_edit.setPlaceholderText(
-            self._t("ph_val_hint_text") if kind == "text" else self._t("ph_val_hint_dt"))
-        val_edit.setStyleSheet("font-size:12px;")
-
-        del_btn = QPushButton("\u2715")
-        del_btn.setFixedSize(22, 22)
-        del_btn.setFlat(True)
-        del_btn.setStyleSheet("QPushButton{font-size:12px;color:gray;border:none;}"
-                              "QPushButton:hover{color:white;background:#c42b1c;border-radius:3px;}")
-
-        row_lo.addWidget(key_edit)
-        row_lo.addWidget(type_cb)
-        row_lo.addWidget(val_edit, 1)
-        row_lo.addWidget(del_btn)
-
-        self._ph_rows_lo.addWidget(row_w)
-        entry = {"widget": row_w, "key": key_edit, "type": type_cb, "value": val_edit}
-        self._ph_row_widgets.append(entry)
-
-        # update value hint when type changes
-        def _on_type_change(idx: int, ve=val_edit, tc=type_cb) -> None:
-            k = tc.itemData(idx)
-            ve.setPlaceholderText(
-                self._t("ph_val_hint_text") if k == "text" else self._t("ph_val_hint_dt"))
-            self._ph_save()
-        type_cb.currentIndexChanged.connect(_on_type_change)
-
-        # auto-save on edit
-        key_edit.editingFinished.connect(self._ph_save)
-        val_edit.editingFinished.connect(self._ph_save)
-
-        # delete
-        del_btn.clicked.connect(lambda _, e=entry: self._ph_del_row(e))
-
-    def _ph_add_row(self) -> None:
-        self._ph_build_row()
-        self._ph_save()
-
-    def _ph_del_row(self, entry: dict) -> None:
-        if entry in self._ph_row_widgets:
-            self._ph_row_widgets.remove(entry)
-        entry["widget"].setParent(None)
-        entry["widget"].deleteLater()
-        self._ph_save()
-
-    def _ph_save(self) -> None:
-        """Sync UI rows back to state and persist."""
-        cps: list[CustomPlaceholder] = []
-        for row in self._ph_row_widgets:
-            key = row["key"].text().strip()
-            kind = row["type"].currentData()
-            val = row["value"].text()
-            cps.append(CustomPlaceholder(key=key, kind=kind, value=val))
-        self._state.custom_placeholders = cps
-        self._save()
 
     def _status(self, msg: str) -> None:
         self.statusBar().showMessage(msg, 8000)
@@ -1109,8 +564,7 @@ class MainWindow(QMainWindow):
         self._tray.show()
         self.hide()
         if msg and not self._tray_tipped:
-            self._tray.showMessage(self._t("tray_title"), self._t("tray_msg"),
-                                   QSystemTrayIcon.MessageIcon.Information, 2000)
+            self._tray.show_message(self._t("tray_title"), self._t("tray_msg"))
             self._tray_tipped = True
 
     def _quit(self) -> None:
@@ -1124,10 +578,6 @@ class MainWindow(QMainWindow):
         if app:
             app.quit()
 
-    def _on_tray(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
-            self._show_from_tray()
-
     # ── window events ──────────────────────────────────────────────────
 
     def showEvent(self, e) -> None:
@@ -1136,11 +586,10 @@ class MainWindow(QMainWindow):
             try:
                 apply_windows_11_backdrop(int(self.winId()))
             except Exception:
-                pass
+                log.debug("DWM backdrop not available", exc_info=True)
             self._backdrop_done = True
 
     def changeEvent(self, e: QEvent) -> None:
-        # Removed minimize_to_tray behavior - minimize should just minimize
         super().changeEvent(e)
 
     def closeEvent(self, e: QCloseEvent) -> None:
@@ -1152,7 +601,7 @@ class MainWindow(QMainWindow):
             return
         self._quitting = True
         self._sidebar.hide()
-        unregister_hotkeys(int(self.winId()), list(self._hotkeys.keys()))
+        self._hk_reg.unregister_all(int(self.winId()))
         self._tray.hide()
         super().closeEvent(e)
         app = QApplication.instance()
@@ -1164,7 +613,11 @@ class MainWindow(QMainWindow):
             addr = message.__int__() if hasattr(message, "__int__") else int(message)
             msg = MSG.from_address(addr)
             if msg.message == WM_HOTKEY:
-                act = self._hotkeys.get(int(msg.wParam))
+                now = time.monotonic()
+                if now - self._last_hk_time < _HK_DEBOUNCE:
+                    return True, 0
+                self._last_hk_time = now
+                act = self._hk_reg.lookup(int(msg.wParam))
                 if act:
                     kind, val = act
                     if kind == "sb":

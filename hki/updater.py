@@ -1,6 +1,7 @@
 """Silent auto-updater — checks update.xml once per session, applies on close."""
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from urllib.request import urlopen, Request
 from xml.etree import ElementTree
 
 from hki.storage import VERSION
+
+log = logging.getLogger(__name__)
 
 # ── configuration ─────────────────────────────────────────────────────
 # Raw URL to update.xml in the repo (main branch)
@@ -120,7 +123,7 @@ def _check_and_download() -> None:
         info.local_path = tmp
         _pending = info
     except Exception:
-        pass  # silent — update is optional
+        log.debug("Update check failed", exc_info=True)
 
 
 def _spawn_cleanup(old: Path) -> None:

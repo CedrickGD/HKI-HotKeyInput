@@ -1,4 +1,4 @@
-from hki.main import run
+from hki.app import run
 
 
 if __name__ == "__main__":

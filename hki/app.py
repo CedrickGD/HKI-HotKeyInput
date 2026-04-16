@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
 
@@ -10,7 +13,7 @@ from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from hki.updater import apply_pending_update, check_for_update_async
-from hki.window import MainWindow
+from hki.main_window import MainWindow
 
 
 def resource_path(*parts: str) -> Path:
@@ -18,7 +21,25 @@ def resource_path(*parts: str) -> Path:
     return base.joinpath(*parts)
 
 
+def _setup_logging() -> None:
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    log_dir = Path(base) / "HKI"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        log_dir / "hki.log", maxBytes=512_000, backupCount=1, encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root = logging.getLogger("hki")
+    root.setLevel(logging.INFO)
+    root.addHandler(handler)
+
+
 def run() -> int:
+    _setup_logging()
+
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tray", action="store_true")
     args, qt_args = parser.parse_known_args()
