@@ -98,3 +98,24 @@ class Store:
             json.dumps(asdict(state), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+
+# ── Import / Export ──────────────────────────────────────────────────
+
+def export_presets(presets: list[Preset], path: str | Path) -> None:
+    """Write presets to a .hki file."""
+    data = {"hki_version": VERSION, "presets": [asdict(p) for p in presets]}
+    Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def import_presets(path: str | Path) -> list[Preset]:
+    """Read presets from a .hki file. Returns list of Preset with fresh IDs."""
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    out: list[Preset] = []
+    for p in raw.get("presets", []):
+        out.append(Preset(
+            name=p.get("name", ""),
+            text=p.get("text", ""),
+            hotkey=p.get("hotkey", ""),
+        ))
+    return out

@@ -10,7 +10,7 @@ from typing import Callable
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QFormLayout,
+    QAbstractItemView, QApplication, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMenu, QMessageBox, QPushButton,
     QSizePolicy, QSplitter, QStatusBar, QTextEdit,
@@ -21,7 +21,7 @@ from hki.hotkeys import HotkeyRegistry
 from hki.translations import LANGS, LANG_NAMES, TR
 from hki.clipboard import resolve_placeholders, restore_clipboard, snap_clipboard
 from hki.placeholders import PlaceholderPanel
-from hki.storage import VERSION, Preset, Store, _utc_now
+from hki.storage import VERSION, Preset, Store, _utc_now, export_presets, import_presets
 from hki.tray import TrayIcon
 from hki.widgets import HotkeyLineEdit, Sidebar
 from hki.windows_api import (
@@ -117,6 +117,16 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         tb.addWidget(spacer)
+
+        self._import_btn = QPushButton()
+        self._import_btn.clicked.connect(self._import)
+        tb.addWidget(self._import_btn)
+
+        self._export_btn = QPushButton()
+        self._export_btn.clicked.connect(self._export)
+        tb.addWidget(self._export_btn)
+
+        tb.addSeparator()
 
         self._sb_btn = QPushButton()
         self._sb_btn.clicked.connect(self._open_sb_ui)
@@ -215,6 +225,8 @@ class MainWindow(QMainWindow):
         for l, a in self._lang_acts.items():
             a.setChecked(l == self._lang)
         self._sb_hk_lbl.setText(f"  {self._t('sb_hotkey')}  ")
+        self._import_btn.setText(self._t("import"))
+        self._export_btn.setText(self._t("export"))
         self._sb_btn.setText(self._t("open_sb"))
         self._search.setPlaceholderText(self._t("search"))
         self._btn_new.setText(self._t("new"))
@@ -417,6 +429,45 @@ class MainWindow(QMainWindow):
         self._refresh_list(fb)
         self._reg_hotkeys()
         self._status(self._t("deleted", p=p.name))
+
+    def _export(self) -> None:
+        presets = self._state.presets
+        if not presets:
+            self._status(self._t("no_presets"))
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, self._t("export_title"), "presets.hki",
+            "HKI Presets (*.hki)")
+        if not path:
+            return
+        try:
+            export_presets(presets, path)
+            self._status(self._t("exported", n=len(presets)))
+        except Exception:
+            log.exception("Export failed")
+            self._status(self._t("export_fail"))
+
+    def _import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, self._t("import_title"), "",
+            "HKI Presets (*.hki)")
+        if not path:
+            return
+        try:
+            incoming = import_presets(path)
+        except Exception:
+            log.exception("Import failed")
+            self._status(self._t("import_fail"))
+            return
+        if not incoming:
+            self._status(self._t("import_empty"))
+            return
+        self._commit(False)
+        self._state.presets.extend(incoming)
+        self._save()
+        self._refresh_list(incoming[0].id)
+        self._reg_hotkeys()
+        self._status(self._t("imported", n=len(incoming)))
 
     def _copy(self) -> None:
         p = self._get()
